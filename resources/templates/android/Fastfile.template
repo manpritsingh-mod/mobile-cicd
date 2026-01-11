@@ -1,0 +1,99 @@
+# Fastlane configuration for Android React Native
+# This file handles BUILD and DEPLOYMENT only
+# Testing and linting are done via npm/Gradle commands directly
+
+default_platform(:android)
+
+platform :android do
+
+  desc "Build Android app (APK or AAB)"
+  lane :build do |options|
+    build_type = options[:build_type] || "debug"
+    flavor = options[:flavor] || ""
+    output_type = options[:output_type] || "apk"
+    
+    # Clean first if requested
+    if options[:clean]
+      gradle(task: "clean")
+    end
+    
+    # Determine task based on output type
+    task = output_type == "aab" ? "bundle" : "assemble"
+    
+    # Build full task name
+    full_task = "#{task}#{flavor.capitalize}#{build_type.capitalize}"
+    
+    gradle(
+      task: full_task,
+      flags: "--stacktrace",
+      properties: {
+        "versionName" => options[:version_name] || "1.0.0",
+        "versionCode" => options[:version_code] || 1
+      }
+    )
+  end
+
+  desc "Deploy to Google Play Store"
+  lane :deploy do |options|
+    track = options[:track] || "internal"
+    aab_path = options[:aab] || lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
+    
+    # Validate AAB exists
+    UI.user_error!("AAB file not found: #{aab_path}") unless File.exist?(aab_path)
+    
+    supply(
+      track: track,
+      aab: aab_path,
+      json_key: options[:json_key] || ENV["GOOGLE_PLAY_JSON_KEY"],
+      package_name: options[:package_name] || ENV["ANDROID_PACKAGE_NAME"],
+      skip_upload_metadata: options[:skip_metadata] != false,
+      skip_upload_images: true,
+      skip_upload_screenshots: options[:skip_screenshots] != false,
+      rollout: options[:rollout] || "1.0"
+    )
+  end
+
+  desc "Upload to Play Store via supply"
+  lane :supply do |options|
+    supply(
+      track: options[:track] || "internal",
+      aab: options[:aab],
+      json_key: options[:json_key] || ENV["GOOGLE_PLAY_JSON_KEY"],
+      package_name: options[:package_name] || ENV["ANDROID_PACKAGE_NAME"],
+      skip_upload_metadata: options[:skip_upload_metadata] != false,
+      skip_upload_images: true,
+      skip_upload_screenshots: options[:skip_upload_screenshots] != false,
+      rollout: options[:rollout] || "1.0",
+      release_notes_file: options[:release_notes_file],
+      mapping: options[:mapping]
+    )
+  end
+
+  desc "Promote release to next track"
+  lane :promote do |options|
+    from_track = options[:from_track] || "internal"
+    to_track = options[:to_track] || "alpha"
+    
+    supply(
+      track: to_track,
+      track_promote_to: to_track,
+      skip_upload_aab: true,
+      skip_upload_metadata: true,
+      json_key: options[:json_key] || ENV["GOOGLE_PLAY_JSON_KEY"],
+      package_name: options[:package_name] || ENV["ANDROID_PACKAGE_NAME"],
+      rollout: options[:rollout] || "1.0"
+    )
+  end
+
+  # Error handling
+  error do |lane, exception|
+    if ENV["SLACK_WEBHOOK_URL"]
+      slack(
+        message: "Fastlane failed: #{exception.message}",
+        success: false,
+        slack_url: ENV["SLACK_WEBHOOK_URL"]
+      )
+    end
+  end
+
+end
